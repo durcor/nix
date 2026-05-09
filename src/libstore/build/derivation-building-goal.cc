@@ -971,6 +971,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
             DerivationBuilderParams params{
                 .drvPath = drvPath,
                 .buildResult = buildResult,
+                .buildResourceUsage = buildResourceUsage,
                 .drv = *drv,
                 .drvOptions = drvOptions,
                 .inputPaths = inputPaths,
@@ -1392,8 +1393,13 @@ Goal::Done DerivationBuildingGoal::doneSuccess(BuildResult::Success::Status stat
 {
     mcRunningBuilds.reset();
 
-    if (status == BuildResult::Success::Built)
+    if (status == BuildResult::Success::Built) {
         worker.doneBuilds++;
+        if (buildResourceUsage) {
+            if (auto * localStore = dynamic_cast<LocalStore *>(&worker.store))
+                localStore->recordBuildResourceUsage(drvPath, builtOutputs, *buildResourceUsage);
+        }
+    }
 
     worker.updateProgress();
 

@@ -339,6 +339,19 @@ struct LocalSettings : public virtual Config, public GCSettings, public AutoAllo
         )"};
 #endif
 
+    Setting<bool> recordBuildResourceUsage{
+        this,
+        false,
+        "record-build-resource-usage",
+        R"(
+          Whether to record observed local build resource usage in the local store database.
+
+          This only records metrics for builds that already run in a Linux cgroup.
+        )",
+        {},
+        true,
+        Xp::BuildResourceUsage};
+
     Setting<bool> impersonateLinux26{
         this,
         false,

@@ -5,6 +5,7 @@
 #include "nix/store/local-store.hh"
 #include "nix/store/parsed-derivations.hh"
 #include "nix/store/derivation-options.hh"
+#include "nix/store/build-resource-usage.hh"
 #include "nix/store/build/derivation-building-misc.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/pathlocks.hh"
@@ -67,6 +68,8 @@ private:
     const BuildMode buildMode;
 
     std::unique_ptr<MaintainCount<uint64_t>> mcRunningBuilds;
+
+    std::optional<BuildResourceUsage> buildResourceUsage;
 
     std::string key() override;
 

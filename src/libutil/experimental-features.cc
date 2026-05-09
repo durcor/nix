@@ -183,6 +183,16 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
         .trackingUrl = "https://github.com/NixOS/nix/milestone/36",
     },
     {
+        .tag = Xp::BuildResourceUsage,
+        .name = "build-resource-usage",
+        .description = R"(
+            Allows Nix to record observed local build resource usage in the
+            local store database. This is advisory, machine-local telemetry and
+            does not affect derivation hashes, output paths, or build scheduling.
+        )",
+        .trackingUrl = "https://github.com/NixOS/nix/milestone/36",
+    },
+    {
         .tag = Xp::DaemonTrustOverride,
         .name = "daemon-trust-override",
         .description = R"(

@@ -5,6 +5,7 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include "nix/store/build-result.hh"
+#include "nix/store/build-resource-usage.hh"
 #include "nix/store/derivation-options.hh"
 #include "nix/store/build/derivation-building-misc.hh"
 #include "nix/store/derivations.hh"
@@ -62,6 +63,8 @@ struct DerivationBuilderParams
     const StorePath & drvPath;
 
     BuildResult & buildResult;
+
+    std::optional<BuildResourceUsage> & buildResourceUsage;
 
     /**
      * The derivation stored at drvPath.

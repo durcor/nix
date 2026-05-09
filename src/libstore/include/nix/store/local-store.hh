@@ -3,6 +3,7 @@
 
 #include "nix/store/sqlite.hh"
 
+#include "nix/store/build-resource-usage.hh"
 #include "nix/store/pathlocks.hh"
 #include "nix/store/store-api.hh"
 #include "nix/store/indirect-root-store.hh"
@@ -440,6 +441,10 @@ public:
      */
     void registerDrvOutput(const Realisation & info) override;
     void registerDrvOutput(const Realisation & info, CheckSigsFlag checkSigs) override;
+    void recordBuildResourceUsage(
+        const StorePath & drvPath,
+        const std::map<std::string, UnkeyedRealisation> & builtOutputs,
+        const BuildResourceUsage & usage);
     void cacheDrvOutputMapping(
         State & state, const uint64_t deriver, const std::string & outputName, const StorePath & output);
 

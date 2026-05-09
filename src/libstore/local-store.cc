@@ -119,6 +119,7 @@ struct LocalStore::State::Stmts
     SQLiteStmt QueryRealisedOutput;
     SQLiteStmt QueryPathFromHashPart;
     SQLiteStmt QueryValidPaths;
+    SQLiteStmt UpsertBuildResourceUsage;
 };
 
 LocalStore::LocalStore(ref<const Config> config)
@@ -359,6 +360,13 @@ LocalStore::LocalStore(ref<const Config> config)
     // ensure efficient lookup.
     state->stmts->QueryPathFromHashPart.create(state->db, "select path from ValidPaths where path >= ? limit 1;");
     state->stmts->QueryValidPaths.create(state->db, "select path from ValidPaths");
+    state->stmts->UpsertBuildResourceUsage.create(
+        state->db,
+        R"(
+            insert or replace into BuildResourceUsage
+                (drvPath, outputName, peakMemoryBytes, cpuUserMicros, cpuSystemMicros, wallTime, sampleTime)
+            values (?, ?, ?, ?, ?, ?, ?);
+        )");
     if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
         state->stmts->RegisterRealisedOutput.create(
             state->db,
@@ -605,6 +613,20 @@ void LocalStore::upgradeDBSchema(State & state)
         );
 
     doUpgrade("20260309-drop-redundant-indexreferrer", "drop index if exists IndexReferrer");
+    doUpgrade(
+        "20260509-build-resource-usage",
+        R"(
+            create table if not exists BuildResourceUsage (
+                drvPath         text not null,
+                outputName      text not null,
+                peakMemoryBytes integer,
+                cpuUserMicros   integer,
+                cpuSystemMicros integer,
+                wallTime        integer,
+                sampleTime      integer not null,
+                primary key (drvPath, outputName)
+            )
+        )");
 }
 
 /* To improve purity, users may want to make the Nix store a read-only
@@ -695,6 +717,39 @@ void LocalStore::cacheDrvOutputMapping(
 {
     retrySQLite<void>(
         [&]() { state.stmts->AddDerivationOutput.use()(deriver)(outputName) (printStorePath(output)).exec(); });
+}
+
+void LocalStore::recordBuildResourceUsage(
+    const StorePath & drvPath,
+    const std::map<std::string, UnkeyedRealisation> & builtOutputs,
+    const BuildResourceUsage & usage)
+{
+    if (!config->getLocalSettings().recordBuildResourceUsage)
+        return;
+
+    retrySQLite<void>([&]() {
+        auto state(_state->lock());
+        SQLiteTxn txn(state->db);
+        for (auto & [outputName, _] : builtOutputs) {
+            auto stmt = state->stmts->UpsertBuildResourceUsage.use();
+            stmt(drvPath.to_string())(outputName)(
+                static_cast<int64_t>(usage.peakMemoryBytes.value_or(0)), usage.peakMemoryBytes.has_value());
+            if (usage.cpuUser)
+                stmt(static_cast<int64_t>(usage.cpuUser->count()));
+            else
+                stmt.bind();
+            if (usage.cpuSystem)
+                stmt(static_cast<int64_t>(usage.cpuSystem->count()));
+            else
+                stmt.bind();
+            if (usage.wallTime)
+                stmt(static_cast<int64_t>(*usage.wallTime));
+            else
+                stmt.bind();
+            stmt(static_cast<int64_t>(usage.sampleTime)).exec();
+        }
+        txn.commit();
+    });
 }
 
 uint64_t LocalStore::addValidPath(State & state, const ValidPathInfo & info)

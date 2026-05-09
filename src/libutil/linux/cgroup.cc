@@ -73,6 +73,18 @@ CgroupStats getCgroupStats(const std::filesystem::path & cgroup)
         }
     }
 
+    auto memoryPeakPath = cgroup / "memory.peak";
+
+    if (pathExists(memoryPeakPath)) {
+        try {
+            auto n = string2Int<uint64_t>(trim(readFile(memoryPeakPath)));
+            if (n)
+                stats.peakMemoryBytes = *n;
+        } catch (SysError &) {
+            // Treat peak memory as optional; CPU stats retain the existing behavior.
+        }
+    }
+
     return stats;
 }
 

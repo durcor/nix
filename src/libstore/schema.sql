@@ -39,3 +39,14 @@ create table if not exists DerivationOutputs (
 );
 
 create index if not exists IndexDerivationOutputs on DerivationOutputs(path);
+
+create table if not exists BuildResourceUsage (
+    drvPath         text not null,
+    outputName      text not null,
+    peakMemoryBytes integer,
+    cpuUserMicros   integer,
+    cpuSystemMicros integer,
+    wallTime        integer,
+    sampleTime      integer not null,
+    primary key (drvPath, outputName)
+);

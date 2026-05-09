@@ -830,6 +830,15 @@ struct ChrootLinuxDerivationBuilder : ChrootDerivationBuilder, LinuxDerivationBu
             if (getStats) {
                 buildResult.cpuUser = stats.cpuUser;
                 buildResult.cpuSystem = stats.cpuSystem;
+                buildResourceUsage = BuildResourceUsage{
+                    .peakMemoryBytes = stats.peakMemoryBytes,
+                    .cpuUser = stats.cpuUser,
+                    .cpuSystem = stats.cpuSystem,
+                    .wallTime = buildResult.stopTime >= buildResult.startTime
+                                    ? std::optional<time_t>{buildResult.stopTime - buildResult.startTime}
+                                    : std::nullopt,
+                    .sampleTime = buildResult.stopTime,
+                };
             }
             return;
         }

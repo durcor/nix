@@ -102,6 +102,12 @@ sources = files(
   'xml-writer.cc',
 )
 
+if host_machine.system() == 'linux'
+  sources += files(
+    'linux-cgroup.cc',
+  )
+endif
+
 if host_machine.system() != 'windows'
   subdir('unix')
 endif
