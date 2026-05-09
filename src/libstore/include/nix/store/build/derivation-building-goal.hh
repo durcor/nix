@@ -70,8 +70,11 @@ private:
     std::unique_ptr<MaintainCount<uint64_t>> mcRunningBuilds;
 
     std::optional<BuildResourceUsage> buildResourceUsage;
+    bool buildResourceUsageEstimateLoaded = false;
+    std::optional<uint64_t> estimatedPeakMemoryBytes;
 
     std::string key() override;
+    void loadBuildResourceUsageEstimate(LocalStore & localStore);
 
     struct LocalBuildCapability
     {
@@ -128,6 +131,11 @@ private:
     {
         return JobCategory::Build;
     };
+
+    std::optional<uint64_t> localBuildMemoryEstimate() const override
+    {
+        return estimatedPeakMemoryBytes;
+    }
 };
 
 } // namespace nix

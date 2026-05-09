@@ -282,6 +282,16 @@ constexpr std::array<ExperimentalFeatureDetails, numXpFeatures> xpFeatureDetails
         .trackingUrl = "https://github.com/NixOS/nix/milestone/62",
     },
     {
+        .tag = Xp::DynamicBuildScheduling,
+        .name = "dynamic-build-scheduling",
+        .description = R"(
+            Allows Nix to reduce local build concurrency based on previously
+            recorded per-derivation peak memory usage. The configured
+            `max-jobs` value remains the hard upper bound.
+        )",
+        .trackingUrl = "https://github.com/NixOS/nix/milestone/36",
+    },
+    {
         .tag = Xp::BLAKE3Hashes,
         .name = "blake3-hashes",
         .description = R"(

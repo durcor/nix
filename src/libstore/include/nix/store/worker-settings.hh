@@ -70,6 +70,34 @@ public:
         )",
         {"build-max-jobs"}};
 
+    Setting<bool> dynamicBuildScheduling{
+        this,
+        false,
+        "dynamic-build-scheduling",
+        R"(
+          Whether to reduce local build concurrency using previously recorded
+          peak memory usage for derivations.
+
+          This setting never increases concurrency beyond [`max-jobs`](#conf-max-jobs).
+          Derivations without recorded peak memory usage use the normal job
+          slot behavior.
+        )",
+        {},
+        true,
+        Xp::DynamicBuildScheduling};
+
+    Setting<unsigned int> dynamicBuildSchedulingMemoryHeadroomPercent{
+        this,
+        20,
+        "dynamic-build-scheduling-memory-headroom-percent",
+        R"(
+          The percentage of detected memory capacity to reserve when
+          `dynamic-build-scheduling` is enabled.
+        )",
+        {},
+        true,
+        Xp::DynamicBuildScheduling};
+
     Setting<unsigned int> maxSubstitutionJobs{
         this,
         16,

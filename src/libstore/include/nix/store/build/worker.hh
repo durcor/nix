@@ -11,6 +11,7 @@
 
 #include <functional>
 #include <future>
+#include <optional>
 #include <thread>
 #include <queue>
 
@@ -43,6 +44,36 @@ GoalPtr upcast_goal(std::shared_ptr<DerivationGoal> subGoal);
 
 typedef std::chrono::time_point<std::chrono::steady_clock> steady_time_point;
 
+class DynamicBuildScheduler
+{
+public:
+    struct Config
+    {
+        bool enabled = false;
+        uint64_t memoryBudgetBytes = 0;
+    };
+
+    DynamicBuildScheduler() = default;
+    explicit DynamicBuildScheduler(Config config);
+
+    static std::optional<uint64_t> detectMemoryBudgetBytes();
+    static uint64_t applyHeadroom(uint64_t bytes, unsigned int headroomPercent);
+
+    bool canStartBuild(size_t nrLocalBuilds, unsigned int maxBuildJobs, std::optional<uint64_t> peakMemoryBytes) const;
+    void buildStarted(std::optional<uint64_t> peakMemoryBytes);
+    void buildFinished(std::optional<uint64_t> peakMemoryBytes);
+
+    uint64_t getRunningKnownMemoryBytes() const
+    {
+        return runningKnownMemoryBytes;
+    }
+
+private:
+    bool enabled = false;
+    uint64_t memoryBudgetBytes = 0;
+    uint64_t runningKnownMemoryBytes = 0;
+};
+
 /**
  * A mapping used to remember for each child process to what goal it
  * belongs, and comm channels for receiving log data and output
@@ -55,6 +86,7 @@ struct Child
     std::set<MuxablePipePollState::CommChannel> channels;
     bool respectTimeouts;
     bool inBuildSlot;
+    std::optional<uint64_t> localBuildMemoryEstimate;
     /**
      * Time we last got output on stdout/stderr
      */
@@ -200,6 +232,7 @@ public:
     Store & store;
     Store & evalStore;
     const WorkerSettings & settings;
+    DynamicBuildScheduler dynamicBuildScheduler;
 
     /**
      * Function to get the substituters to use for path substitution.
@@ -309,6 +342,9 @@ public:
      * remote builds via the build hook).
      */
     size_t getNrLocalBuilds();
+
+    bool canStartBuild(std::optional<uint64_t> peakMemoryBytes) const;
+    bool canStartBuild(const GoalPtr & goal) const;
 
     /**
      * Return the number of substitution processes currently running.

@@ -11,10 +11,98 @@
 #ifndef _WIN32 // TODO Enable building on Windows
 #  include "nix/store/build/hook-instance.hh"
 #endif
+#include "nix/util/file-system.hh"
 #include "nix/util/signals.hh"
+#include "nix/util/util.hh"
 #include "nix/store/globals.hh"
 
+#ifdef __linux__
+#  include "nix/util/cgroup.hh"
+#endif
+
+#ifndef _WIN32
+#  include <unistd.h>
+#endif
+
 namespace nix {
+
+DynamicBuildScheduler::DynamicBuildScheduler(Config config)
+    : enabled(config.enabled && config.memoryBudgetBytes != 0)
+    , memoryBudgetBytes(config.memoryBudgetBytes)
+{
+}
+
+uint64_t DynamicBuildScheduler::applyHeadroom(uint64_t bytes, unsigned int headroomPercent)
+{
+    auto retainedPercent = headroomPercent >= 100 ? 0 : 100 - headroomPercent;
+    return bytes / 100 * retainedPercent + bytes % 100 * retainedPercent / 100;
+}
+
+static std::optional<uint64_t> getHostMemoryBytes()
+{
+#ifndef _WIN32
+    auto pages = sysconf(_SC_PHYS_PAGES);
+    auto pageSize = sysconf(_SC_PAGESIZE);
+    if (pages <= 0 || pageSize <= 0)
+        return std::nullopt;
+    return static_cast<uint64_t>(pages) * static_cast<uint64_t>(pageSize);
+#else
+    return std::nullopt;
+#endif
+}
+
+std::optional<uint64_t> DynamicBuildScheduler::detectMemoryBudgetBytes()
+{
+#ifdef __linux__
+    try {
+        auto cgroupFS = linux::getCgroupFS();
+        if (cgroupFS) {
+            auto memoryMaxPath = *cgroupFS / linux::getCurrentCgroup().rel() / "memory.max";
+            if (pathExists(memoryMaxPath)) {
+                auto memoryMax = trim(readFile(memoryMaxPath));
+                if (memoryMax != "max") {
+                    auto bytes = string2Int<uint64_t>(memoryMax);
+                    if (bytes && *bytes != 0)
+                        return *bytes;
+                }
+            }
+        }
+    } catch (Error &) {
+        ignoreExceptionInDestructor(lvlDebug);
+    }
+#endif
+
+    return getHostMemoryBytes();
+}
+
+bool DynamicBuildScheduler::canStartBuild(
+    size_t nrLocalBuilds, unsigned int maxBuildJobs, std::optional<uint64_t> peakMemoryBytes) const
+{
+    if (maxBuildJobs == 0 || nrLocalBuilds >= maxBuildJobs)
+        return false;
+
+    if (!enabled || !peakMemoryBytes)
+        return true;
+
+    if (*peakMemoryBytes <= memoryBudgetBytes && runningKnownMemoryBytes <= memoryBudgetBytes - *peakMemoryBytes)
+        return true;
+
+    return nrLocalBuilds == 0;
+}
+
+void DynamicBuildScheduler::buildStarted(std::optional<uint64_t> peakMemoryBytes)
+{
+    if (enabled && peakMemoryBytes)
+        runningKnownMemoryBytes += *peakMemoryBytes;
+}
+
+void DynamicBuildScheduler::buildFinished(std::optional<uint64_t> peakMemoryBytes)
+{
+    if (!enabled || !peakMemoryBytes)
+        return;
+    assert(runningKnownMemoryBytes >= *peakMemoryBytes);
+    runningKnownMemoryBytes -= *peakMemoryBytes;
+}
 
 Worker::Worker(Store & store, Store & evalStore)
     /* Can't use make_ref, because the constructor is private. */
@@ -28,6 +116,14 @@ Worker::Worker(Store & store, Store & evalStore)
     , store(store)
     , evalStore(evalStore)
     , settings(nix::settings.getWorkerSettings())
+    , dynamicBuildScheduler(
+          DynamicBuildScheduler::Config{
+              .enabled = experimentalFeatureSettings.isEnabled(Xp::DynamicBuildScheduling)
+                         && settings.dynamicBuildScheduling.get(),
+              .memoryBudgetBytes = DynamicBuildScheduler::applyHeadroom(
+                  DynamicBuildScheduler::detectMemoryBudgetBytes().value_or(0),
+                  settings.dynamicBuildSchedulingMemoryHeadroomPercent.get()),
+          })
     , getSubstituters{[] {
         return nix::settings.getWorkerSettings().useSubstitutes ? getDefaultSubstituters() : std::list<ref<Store>>{};
     }}
@@ -187,6 +283,16 @@ size_t Worker::getNrLocalBuilds()
     return nrLocalBuilds;
 }
 
+bool Worker::canStartBuild(std::optional<uint64_t> peakMemoryBytes) const
+{
+    return dynamicBuildScheduler.canStartBuild(nrLocalBuilds, settings.maxBuildJobs, peakMemoryBytes);
+}
+
+bool Worker::canStartBuild(const GoalPtr & goal) const
+{
+    return canStartBuild(goal->localBuildMemoryEstimate());
+}
+
 size_t Worker::getNrSubstitutions()
 {
     return nrSubstitutions;
@@ -201,6 +307,7 @@ void Worker::childStarted(
     child.channels = channels;
     child.timeStarted = child.lastOutput = steady_time_point::clock::now();
     child.inBuildSlot = inBuildSlot;
+    child.localBuildMemoryEstimate = goal->localBuildMemoryEstimate();
     child.respectTimeouts = respectTimeouts;
     children.emplace_back(child);
     if (inBuildSlot) {
@@ -210,6 +317,7 @@ void Worker::childStarted(
             break;
         case JobCategory::Build:
             nrLocalBuilds++;
+            dynamicBuildScheduler.buildStarted(child.localBuildMemoryEstimate);
             break;
         case JobCategory::Administration:
         default:
@@ -239,6 +347,7 @@ void Worker::childTerminated(Goal * goal, JobCategory jobCategory)
             break;
         case JobCategory::Build:
             assert(nrLocalBuilds > 0);
+            dynamicBuildScheduler.buildFinished(i->localBuildMemoryEstimate);
             nrLocalBuilds--;
             break;
         case JobCategory::Administration:
@@ -249,18 +358,32 @@ void Worker::childTerminated(Goal * goal, JobCategory jobCategory)
     }
 
     children.erase(i);
-    auto & waiting = jobCategory == JobCategory::Substitution ? wantingToSubstitute : wantingToBuild;
-
-    /* Wake up goals waiting for a build slot. Wake at most one waiter to avoid
-       starting unnecessary work (that is accompanied by coroutine frame allocation). */
-    auto it = waiting.begin();
-    while (it != waiting.end()) {
-        if (auto goal = it->lock()) {
-            waiting.erase(it);
-            wakeUp(goal);
-            break;
+    if (jobCategory == JobCategory::Substitution) {
+        /* Wake up goals waiting for a build slot. Wake at most one waiter to avoid
+           starting unnecessary work (that is accompanied by coroutine frame allocation). */
+        auto it = wantingToSubstitute.begin();
+        while (it != wantingToSubstitute.end()) {
+            if (auto goal = it->lock()) {
+                wantingToSubstitute.erase(it);
+                wakeUp(goal);
+                break;
+            }
+            it = wantingToSubstitute.erase(it);
         }
-        it = waiting.erase(it);
+    } else {
+        auto it = wantingToBuild.begin();
+        while (it != wantingToBuild.end()) {
+            if (auto goal = it->lock()) {
+                if (canStartBuild(goal)) {
+                    wantingToBuild.erase(it);
+                    wakeUp(goal);
+                    break;
+                }
+                ++it;
+            } else {
+                it = wantingToBuild.erase(it);
+            }
+        }
     }
 }
 
@@ -272,7 +395,7 @@ void Worker::waitForBuildSlot(GoalPtr goal)
         if (goal->jobCategory() == JobCategory::Substitution)
             return getNrSubstitutions() < settings.maxSubstitutionJobs;
         else
-            return getNrLocalBuilds() < settings.maxBuildJobs;
+            return canStartBuild(goal);
     }();
 
     if (slotAvailable)

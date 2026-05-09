@@ -38,6 +38,7 @@ enum struct ExperimentalFeature {
     VerifiedFetches,
     PipeOperators,
     ExternalBuilders,
+    DynamicBuildScheduling,
     BLAKE3Hashes,
 };
 

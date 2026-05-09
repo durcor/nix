@@ -445,6 +445,7 @@ public:
         const StorePath & drvPath,
         const std::map<std::string, UnkeyedRealisation> & builtOutputs,
         const BuildResourceUsage & usage);
+    std::optional<BuildResourceUsage> queryBuildResourceUsage(const StorePath & drvPath);
     void cacheDrvOutputMapping(
         State & state, const uint64_t deriver, const std::string & outputName, const StorePath & output);
 

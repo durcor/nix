@@ -120,6 +120,7 @@ struct LocalStore::State::Stmts
     SQLiteStmt QueryPathFromHashPart;
     SQLiteStmt QueryValidPaths;
     SQLiteStmt UpsertBuildResourceUsage;
+    SQLiteStmt QueryBuildResourceUsage;
 };
 
 LocalStore::LocalStore(ref<const Config> config)
@@ -366,6 +367,18 @@ LocalStore::LocalStore(ref<const Config> config)
             insert or replace into BuildResourceUsage
                 (drvPath, outputName, peakMemoryBytes, cpuUserMicros, cpuSystemMicros, wallTime, sampleTime)
             values (?, ?, ?, ?, ?, ?, ?);
+        )");
+    state->stmts->QueryBuildResourceUsage.create(
+        state->db,
+        R"(
+            select
+                max(peakMemoryBytes),
+                max(cpuUserMicros),
+                max(cpuSystemMicros),
+                max(wallTime),
+                max(sampleTime)
+            from BuildResourceUsage
+            where drvPath = ?;
         )");
     if (experimentalFeatureSettings.isEnabled(Xp::CaDerivations)) {
         state->stmts->RegisterRealisedOutput.create(
@@ -749,6 +762,30 @@ void LocalStore::recordBuildResourceUsage(
             stmt(static_cast<int64_t>(usage.sampleTime)).exec();
         }
         txn.commit();
+    });
+}
+
+std::optional<BuildResourceUsage> LocalStore::queryBuildResourceUsage(const StorePath & drvPath)
+{
+    return retrySQLite<std::optional<BuildResourceUsage>>([&]() -> std::optional<BuildResourceUsage> {
+        auto state(_state->lock());
+        auto stmt = state->stmts->QueryBuildResourceUsage.use();
+        stmt(drvPath.to_string());
+        if (!stmt.next() || stmt.isNull(4))
+            return std::nullopt;
+
+        BuildResourceUsage usage{
+            .sampleTime = static_cast<time_t>(stmt.getInt(4)),
+        };
+        if (!stmt.isNull(0))
+            usage.peakMemoryBytes = static_cast<uint64_t>(stmt.getInt(0));
+        if (!stmt.isNull(1))
+            usage.cpuUser = std::chrono::microseconds(stmt.getInt(1));
+        if (!stmt.isNull(2))
+            usage.cpuSystem = std::chrono::microseconds(stmt.getInt(2));
+        if (!stmt.isNull(3))
+            usage.wallTime = static_cast<time_t>(stmt.getInt(3));
+        return usage;
     });
 }
 

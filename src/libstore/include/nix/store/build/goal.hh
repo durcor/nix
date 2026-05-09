@@ -624,6 +624,14 @@ public:
      */
     virtual JobCategory jobCategory() const = 0;
 
+    /**
+     * Estimated peak memory for a local build, if known.
+     */
+    virtual std::optional<uint64_t> localBuildMemoryEstimate() const
+    {
+        return std::nullopt;
+    }
+
 protected:
     Co await(Goals waitees);
 

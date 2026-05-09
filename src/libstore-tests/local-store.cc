@@ -199,4 +199,91 @@ TEST(LocalStore, recordBuildResourceUsageEnabled)
     EXPECT_EQ(queryBuildResourceUsageRows(tmpRoot), 1);
 }
 
+TEST(LocalStore, queryBuildResourceUsageMissing)
+{
+    auto tmpRoot = createTempDir();
+    AutoDelete delTmpRoot(tmpRoot, true);
+
+    auto store = openStore(fmt("local?root=%s", tmpRoot.string()));
+    auto localStore = store.dynamic_pointer_cast<LocalStore>();
+    ASSERT_NE(localStore, nullptr);
+
+    EXPECT_EQ(
+        localStore->queryBuildResourceUsage(StorePath::random("query-build-resource-usage-missing.drv")), std::nullopt);
+}
+
+TEST(LocalStore, queryBuildResourceUsageSingleOutput)
+{
+    EnableExperimentalFeature feature{"build-resource-usage"};
+    auto previousRecordBuildResourceUsage = settings.getLocalSettings().recordBuildResourceUsage.get();
+    Finally restoreRecordBuildResourceUsage(
+        [&] { settings.getLocalSettings().recordBuildResourceUsage.assign(previousRecordBuildResourceUsage); });
+    settings.getLocalSettings().recordBuildResourceUsage.assign(true);
+
+    auto tmpRoot = createTempDir();
+    AutoDelete delTmpRoot(tmpRoot, true);
+
+    auto store = openStore(fmt("local?root=%s", tmpRoot.string()));
+    auto localStore = store.dynamic_pointer_cast<LocalStore>();
+    ASSERT_NE(localStore, nullptr);
+
+    auto drvPath = StorePath::random("query-build-resource-usage-single-output.drv");
+    localStore->recordBuildResourceUsage(
+        drvPath,
+        {{"out", UnkeyedRealisation{.outPath = StorePath::random("query-build-resource-usage-single-output")}}},
+        BuildResourceUsage{
+            .peakMemoryBytes = 2048,
+            .cpuUser = std::chrono::microseconds(111),
+            .cpuSystem = std::chrono::microseconds(222),
+            .wallTime = 333,
+            .sampleTime = 444,
+        });
+
+    auto usage = localStore->queryBuildResourceUsage(drvPath);
+    ASSERT_NE(usage, std::nullopt);
+    EXPECT_EQ(usage->peakMemoryBytes, std::optional<uint64_t>{2048});
+    EXPECT_EQ(usage->cpuUser, std::optional<std::chrono::microseconds>{std::chrono::microseconds(111)});
+    EXPECT_EQ(usage->cpuSystem, std::optional<std::chrono::microseconds>{std::chrono::microseconds(222)});
+    EXPECT_EQ(usage->wallTime, std::optional<time_t>{333});
+    EXPECT_EQ(usage->sampleTime, 444);
+}
+
+TEST(LocalStore, queryBuildResourceUsageMultiOutput)
+{
+    EnableExperimentalFeature feature{"build-resource-usage"};
+    auto previousRecordBuildResourceUsage = settings.getLocalSettings().recordBuildResourceUsage.get();
+    Finally restoreRecordBuildResourceUsage(
+        [&] { settings.getLocalSettings().recordBuildResourceUsage.assign(previousRecordBuildResourceUsage); });
+    settings.getLocalSettings().recordBuildResourceUsage.assign(true);
+
+    auto tmpRoot = createTempDir();
+    AutoDelete delTmpRoot(tmpRoot, true);
+
+    auto store = openStore(fmt("local?root=%s", tmpRoot.string()));
+    auto localStore = store.dynamic_pointer_cast<LocalStore>();
+    ASSERT_NE(localStore, nullptr);
+
+    auto drvPath = StorePath::random("query-build-resource-usage-multi-output.drv");
+    localStore->recordBuildResourceUsage(
+        drvPath,
+        {
+            {"dev", UnkeyedRealisation{.outPath = StorePath::random("query-build-resource-usage-multi-output-dev")}},
+            {"out", UnkeyedRealisation{.outPath = StorePath::random("query-build-resource-usage-multi-output-out")}},
+        },
+        BuildResourceUsage{
+            .peakMemoryBytes = 4096,
+            .cpuUser = std::chrono::microseconds(11),
+            .cpuSystem = std::chrono::microseconds(22),
+            .wallTime = 33,
+            .sampleTime = 44,
+        });
+
+    EXPECT_EQ(queryBuildResourceUsageRows(tmpRoot), 2);
+
+    auto usage = localStore->queryBuildResourceUsage(drvPath);
+    ASSERT_NE(usage, std::nullopt);
+    EXPECT_EQ(usage->peakMemoryBytes, std::optional<uint64_t>{4096});
+    EXPECT_EQ(usage->sampleTime, 44);
+}
+
 } // namespace nix

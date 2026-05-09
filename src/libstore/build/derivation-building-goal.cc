@@ -51,6 +51,21 @@ std::string DerivationBuildingGoal::key()
     return "dd$" + std::string(drvPath.name()) + "$" + worker.store.printStorePath(drvPath);
 }
 
+void DerivationBuildingGoal::loadBuildResourceUsageEstimate(LocalStore & localStore)
+{
+    if (buildResourceUsageEstimateLoaded)
+        return;
+    buildResourceUsageEstimateLoaded = true;
+
+    if (!experimentalFeatureSettings.isEnabled(Xp::DynamicBuildScheduling)
+        || !worker.settings.dynamicBuildScheduling.get())
+        return;
+
+    auto usage = localStore.queryBuildResourceUsage(drvPath);
+    if (usage)
+        estimatedPeakMemoryBytes = usage->peakMemoryBytes;
+}
+
 std::string showKnownOutputs(const StoreDirConfig & store, const Derivation & drv)
 {
     std::string msg;
@@ -579,6 +594,8 @@ Goal::Co DerivationBuildingGoal::tryToBuild(StorePathSet inputPaths)
 
     auto tryBuildLocally = [&](bool & valid) -> Goal::Co {
         if (auto * cap = std::get_if<LocalBuildCapability>(&localBuildResult)) {
+            loadBuildResourceUsageEstimate(cap->localStore);
+
             PathLocks outputLocks;
             co_await acquireResources(valid, outputLocks);
             if (valid)
@@ -896,8 +913,7 @@ Goal::Co DerivationBuildingGoal::buildLocally(
     // Will continue here while waiting for a build user below
     while (true) {
 
-        unsigned int curBuilds = worker.getNrLocalBuilds();
-        if (curBuilds >= worker.settings.maxBuildJobs) {
+        if (!worker.canStartBuild(shared_from_this())) {
             outputLocks.unlock();
             co_await waitForBuildSlot();
             co_return tryToBuild(std::move(inputPaths));
@@ -1200,9 +1216,11 @@ HookReply DerivationBuildingGoal::tryBuildHook(const DerivationOptions<StorePath
     try {
 
         /* Send the request to the hook. */
-        worker.hook->sink << "try" << (worker.getNrLocalBuilds() < worker.settings.maxBuildJobs ? 1 : 0)
-                          << drv->platform << worker.store.printStorePath(drvPath)
-                          << drvOptions.getRequiredSystemFeatures(*drv);
+        if (auto * localStore = dynamic_cast<LocalStore *>(&worker.store))
+            loadBuildResourceUsageEstimate(*localStore);
+
+        worker.hook->sink << "try" << (worker.canStartBuild(localBuildMemoryEstimate()) ? 1 : 0) << drv->platform
+                          << worker.store.printStorePath(drvPath) << drvOptions.getRequiredSystemFeatures(*drv);
         worker.hook->sink.flush();
 
         /* Read the first line of input, which should be a word indicating
